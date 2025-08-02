@@ -1,0 +1,119 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Web Tier with EC2 Launch Template and ASG
+
+Parameters:
+  VpcId:
+    Type: String
+  SubnetIds:
+    Type: CommaDelimitedList
+  ALBTargetGroupArn:
+    Type: String
+  KeyPairName:
+    Type: String
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+
+
+Resources:
+
+  WebServerSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable HTTP from ALB
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  WebLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: WebLaunchTemplate
+      LaunchTemplateData:
+        InstanceType: t3.micro
+        ImageId: !Ref LatestAmiId # Amazon Linux 2 AMI (update if needed)
+        KeyName: !Ref KeyPairName
+        SecurityGroupIds:
+          - !Ref WebServerSG
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            yum update -y
+            yum install -y httpd python3
+            systemctl start httpd
+            systemctl enable httpd
+            cd /var/www/html
+            
+            # Create proxy script
+            cat > /var/www/cgi-bin/backend.py << 'EOF'
+            #!/usr/bin/python3
+            import urllib.request
+            import json
+            
+            print("Content-Type: application/json")
+            print()
+            
+            try:
+                response = urllib.request.urlopen('http://internal-AppALB-538821680.ap-southeast-2.elb.amazonaws.com/')
+                data = response.read().decode('utf-8')
+                print(json.dumps({"status": "success", "data": data}))
+            except Exception as e:
+                print(json.dumps({"status": "error", "message": str(e)}))
+            EOF
+            
+            chmod +x /var/www/cgi-bin/backend.py
+            
+            # Create frontend HTML
+            cat > /var/www/html/index.html << 'EOF'
+            <!DOCTYPE html>
+            <html>
+            <head>
+              <title>3-Tier App - Frontend</title>
+            </head>
+            <body>
+              <h1>Frontend (Web Tier)</h1>
+              <p>Calling backend...</p>
+              <div id="response"></div>
+
+              <script>
+                console.log('Starting backend call...');
+                fetch("/cgi-bin/backend.py")
+                  .then(response => {
+                    console.log('Response status:', response.status);
+                    return response.json();
+                  })
+                  .then(data => {
+                    console.log('Backend response:', data);
+                    if (data.status === 'success') {
+                      document.getElementById("response").innerText = data.data;
+                    } else {
+                      document.getElementById("response").innerText = "Backend error: " + data.message;
+                    }
+                  })
+                  .catch(err => {
+                    console.error('Backend error:', err);
+                    document.getElementById("response").innerText = "Backend unavailable: " + err.message;
+                  });
+              </script>
+            </body>
+            </html>
+            EOF
+  WebASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier: !Ref SubnetIds
+      LaunchTemplate:
+        LaunchTemplateId: !Ref WebLaunchTemplate
+        Version: !GetAtt WebLaunchTemplate.LatestVersionNumber
+      MinSize: 2
+      MaxSize: 2
+      DesiredCapacity: 2
+      TargetGroupARNs:
+        - !Ref ALBTargetGroupArn
+
+Outputs:
+  WebServerASG:
+    Value: !Ref WebASG
