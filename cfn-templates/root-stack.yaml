@@ -1,0 +1,52 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Root stack to launch 3-tier architecture
+
+Resources:
+  NetworkStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./network-stack.yaml
+
+  ALBStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./alb-stack.yaml
+      Parameters:
+        VpcId: !GetAtt NetworkStack.Outputs.VpcId
+        PublicSubnet1: !GetAtt NetworkStack.Outputs.PublicSubnet1
+        PublicSubnet2: !GetAtt NetworkStack.Outputs.PublicSubnet2
+        PrivateSubnet1: !GetAtt NetworkStack.Outputs.PrivateSubnet1
+        PrivateSubnet2: !GetAtt NetworkStack.Outputs.PrivateSubnet2
+
+  WebTierStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./web-tier-stack.yaml
+      Parameters:
+        VpcId: !GetAtt NetworkStack.Outputs.VpcId
+        ALBTargetGroupArn: !GetAtt ALBStack.Outputs.WebTargetGroupArn
+        SubnetIds: !Join [ ",", [!GetAtt NetworkStack.Outputs.PublicSubnet1, !GetAtt NetworkStack.Outputs.PublicSubnet2] ]
+        KeyPairName: !GetAtt NetworkStack.Outputs.KeyPairName
+
+  AppTierStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./app-tier-stack.yaml
+      Parameters:
+        VpcId: !GetAtt NetworkStack.Outputs.VpcId
+        ALBTargetGroupArn: !GetAtt ALBStack.Outputs.AppTargetGroupArn
+        SubnetIds: !Join [ ",", [!GetAtt NetworkStack.Outputs.PrivateSubnet1, !GetAtt NetworkStack.Outputs.PrivateSubnet2] ]
+        KeyPairName: !GetAtt NetworkStack.Outputs.KeyPairName
+
+  DBStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./db-stack.yaml
+      Parameters:
+        VpcId: !GetAtt NetworkStack.Outputs.VpcId
+        Subnet1: !GetAtt NetworkStack.Outputs.DBSubnet1
+        Subnet2: !GetAtt NetworkStack.Outputs.DBSubnet2
+
+Outputs:
+  VpcId:
+    Value: !GetAtt NetworkStack.Outputs.VpcId

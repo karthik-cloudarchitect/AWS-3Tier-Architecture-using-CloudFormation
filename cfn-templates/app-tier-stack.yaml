@@ -1,0 +1,116 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: App Tier with EC2 Launch Template and ASG
+
+Parameters:
+  VpcId:
+    Type: String
+  SubnetIds:
+    Type: CommaDelimitedList
+  ALBTargetGroupArn:
+    Type: String
+  KeyPairName:
+    Type: String
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+
+Resources:
+
+  AppServerSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP from internal ALB
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5000
+          ToPort: 5000
+          CidrIp: 10.0.0.0/16
+
+  AppLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: AppLaunchTemplate
+      LaunchTemplateData:
+        InstanceType: t3.micro
+        ImageId: !Ref LatestAmiId # Amazon Linux 2 AMI (update if needed)
+        KeyName: !Ref KeyPairName
+        SecurityGroupIds:
+          - !Ref AppServerSG
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            yum update -y
+            yum install -y python3 git
+            pip3 install flask flask-cors
+            
+            # Create Flask app with CORS support
+            cat > /home/ec2-user/app.py << 'EOF'
+            from flask import Flask
+            from flask_cors import CORS
+            app = Flask(__name__)
+            CORS(app)
+
+            @app.route("/")
+            def home():
+                return "Backend is working!"
+
+            if __name__ == "__main__":
+                app.run(host="0.0.0.0", port=5000)
+            EOF
+            
+            # Test the app directly
+            cd /home/ec2-user
+            python3 app.py &
+            sleep 3
+            
+            # Test if it's responding
+            curl -s http://localhost:5000/ || echo "App not responding"
+            
+            # Kill the test process
+            pkill -f "python3 app.py"
+            
+            # Create systemd service
+            cat <<EOF > /etc/systemd/system/app.service
+            [Unit]
+            Description=Flask Backend
+            After=network.target
+
+            [Service]
+            Type=simple
+            ExecStart=/usr/bin/python3 /home/ec2-user/app.py
+            WorkingDirectory=/home/ec2-user
+            User=ec2-user
+            Restart=always
+            RestartSec=5
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+
+            systemctl daemon-reload
+            systemctl enable app
+            systemctl start app
+            
+            # Check status
+            systemctl status app
+            sleep 5
+            curl -s http://localhost:5000/ || echo "Service not responding"
+
+
+  AppASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier: !Ref SubnetIds
+      LaunchTemplate:
+        LaunchTemplateId: !Ref AppLaunchTemplate
+        Version: !GetAtt AppLaunchTemplate.LatestVersionNumber
+      MinSize: 2
+      MaxSize: 2
+      DesiredCapacity: 2
+      TargetGroupARNs:
+        - !Ref ALBTargetGroupArn
+
+Outputs:
+  AppServerASG:
+    Value: !Ref AppASG

@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>3-Tier App - Frontend</title>
+</head>
+<body>
+  <h1>Frontend (Web Tier)</h1>
+  <p>Calling backend...</p>
+  <div id="response"></div>
+
+  <script>
+    console.log('Starting backend call...');
+    fetch("http://internal-AppALB-538821680.ap-southeast-2.elb.amazonaws.com/")
+      .then(response => {
+        console.log('Response status:', response.status);
+        return response.text();
+      })
+      .then(data => {
+        console.log('Backend response:', data);
+        document.getElementById("response").innerText = data;
+      })
+      .catch(err => {
+        console.error('Backend error:', err);
+        document.getElementById("response").innerText = "Backend unavailable: " + err.message;
+      });
+  </script>
+</body>
+</html>

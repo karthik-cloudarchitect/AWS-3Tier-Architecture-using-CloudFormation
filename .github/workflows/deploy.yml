@@ -1,0 +1,193 @@
+name: Deploy 3-Tier AWS Infrastructure
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: ap-southeast-2
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Validate CloudFormation templates
+      run: |
+        echo "Validating CloudFormation templates..."
+        aws cloudformation validate-template --template-body file://cfn-templates/network-stack.yaml
+        aws cloudformation validate-template --template-body file://cfn-templates/db-stack.yaml
+        aws cloudformation validate-template --template-body file://cfn-templates/alb-stack.yaml
+        aws cloudformation validate-template --template-body file://cfn-templates/app-tier-stack.yaml
+        aws cloudformation validate-template --template-body file://cfn-templates/web-tier-stack.yaml
+        echo "All templates are valid!"
+
+    - name: Deploy Network Stack
+      run: |
+        echo "Deploying Network Stack..."
+        aws cloudformation deploy \
+          --template-file cfn-templates/network-stack.yaml \
+          --stack-name network-stack \
+          --capabilities CAPABILITY_NAMED_IAM \
+          --no-fail-on-empty-changeset
+        echo "Network stack deployed successfully!"
+
+    - name: Get Network Stack outputs
+      id: network
+      run: |
+        echo "Getting Network Stack outputs..."
+        VPC_ID=$(aws cloudformation describe-stacks --stack-name network-stack --query 'Stacks[0].Outputs[?OutputKey==`VpcId`].OutputValue' --output text)
+        PUBLIC_SUBNET_1=$(aws cloudformation describe-stacks --stack-name network-stack --query 'Stacks[0].Outputs[?OutputKey==`PublicSubnet1`].OutputValue' --output text)
+        PUBLIC_SUBNET_2=$(aws cloudformation describe-stacks --stack-name network-stack --query 'Stacks[0].Outputs[?OutputKey==`PublicSubnet2`].OutputValue' --output text)
+        PRIVATE_SUBNET_1=$(aws cloudformation describe-stacks --stack-name network-stack --query 'Stacks[0].Outputs[?OutputKey==`PrivateSubnet1`].OutputValue' --output text)
+        PRIVATE_SUBNET_2=$(aws cloudformation describe-stacks --stack-name network-stack --query 'Stacks[0].Outputs[?OutputKey==`PrivateSubnet2`].OutputValue' --output text)
+        DB_SUBNET_1=$(aws cloudformation describe-stacks --stack-name network-stack --query 'Stacks[0].Outputs[?OutputKey==`DBSubnet1`].OutputValue' --output text)
+        DB_SUBNET_2=$(aws cloudformation describe-stacks --stack-name network-stack --query 'Stacks[0].Outputs[?OutputKey==`DBSubnet2`].OutputValue' --output text)
+        
+        echo "vpc-id=$VPC_ID" >> $GITHUB_OUTPUT
+        echo "public-subnet-1=$PUBLIC_SUBNET_1" >> $GITHUB_OUTPUT
+        echo "public-subnet-2=$PUBLIC_SUBNET_2" >> $GITHUB_OUTPUT
+        echo "private-subnet-1=$PRIVATE_SUBNET_1" >> $GITHUB_OUTPUT
+        echo "private-subnet-2=$PRIVATE_SUBNET_2" >> $GITHUB_OUTPUT
+        echo "db-subnet-1=$DB_SUBNET_1" >> $GITHUB_OUTPUT
+        echo "db-subnet-2=$DB_SUBNET_2" >> $GITHUB_OUTPUT
+
+    - name: Deploy Database Stack
+      run: |
+        echo "Deploying Database Stack..."
+        aws cloudformation deploy \
+          --template-file cfn-templates/db-stack.yaml \
+          --stack-name db-stack \
+          --capabilities CAPABILITY_NAMED_IAM \
+          --parameter-overrides \
+            VpcId=${{ steps.network.outputs.vpc-id }} \
+            Subnet1=${{ steps.network.outputs.db-subnet-1 }} \
+            Subnet2=${{ steps.network.outputs.db-subnet-2 }} \
+          --no-fail-on-empty-changeset
+        echo "Database stack deployed successfully!"
+
+    - name: Deploy ALB Stack
+      run: |
+        echo "Deploying ALB Stack..."
+        aws cloudformation deploy \
+          --template-file cfn-templates/alb-stack.yaml \
+          --stack-name alb-stack \
+          --capabilities CAPABILITY_NAMED_IAM \
+          --parameter-overrides \
+            VpcId=${{ steps.network.outputs.vpc-id }} \
+            PublicSubnet1=${{ steps.network.outputs.public-subnet-1 }} \
+            PublicSubnet2=${{ steps.network.outputs.public-subnet-2 }} \
+            PrivateSubnet1=${{ steps.network.outputs.private-subnet-1 }} \
+            PrivateSubnet2=${{ steps.network.outputs.private-subnet-2 }} \
+          --no-fail-on-empty-changeset
+        echo "ALB stack deployed successfully!"
+
+    - name: Get ALB Stack outputs
+      id: alb
+      run: |
+        echo "Getting ALB Stack outputs..."
+        WEB_TARGET_GROUP_ARN=$(aws cloudformation describe-stacks --stack-name alb-stack --query 'Stacks[0].Outputs[?OutputKey==`WebTargetGroupArn`].OutputValue' --output text)
+        APP_TARGET_GROUP_ARN=$(aws cloudformation describe-stacks --stack-name alb-stack --query 'Stacks[0].Outputs[?OutputKey==`AppTargetGroupArn`].OutputValue' --output text)
+        
+        echo "web-target-group-arn=$WEB_TARGET_GROUP_ARN" >> $GITHUB_OUTPUT
+        echo "app-target-group-arn=$APP_TARGET_GROUP_ARN" >> $GITHUB_OUTPUT
+
+    - name: Deploy App Tier Stack
+      run: |
+        echo "Deploying App Tier Stack..."
+        aws cloudformation deploy \
+          --template-file cfn-templates/app-tier-stack.yaml \
+          --stack-name app-tier-stack \
+          --capabilities CAPABILITY_NAMED_IAM \
+          --parameter-overrides \
+            VpcId=${{ steps.network.outputs.vpc-id }} \
+            ALBTargetGroupArn=${{ steps.alb.outputs.app-target-group-arn }} \
+            SubnetIds="${{ steps.network.outputs.private-subnet-1 }},${{ steps.network.outputs.private-subnet-2 }}" \
+            KeyPairName=sshbastion \
+          --no-fail-on-empty-changeset
+        echo "App Tier stack deployed successfully!"
+
+    - name: Deploy Web Tier Stack
+      run: |
+        echo "Deploying Web Tier Stack..."
+        aws cloudformation deploy \
+          --template-file cfn-templates/web-tier-stack.yaml \
+          --stack-name web-tier-stack \
+          --capabilities CAPABILITY_NAMED_IAM \
+          --parameter-overrides \
+            VpcId=${{ steps.network.outputs.vpc-id }} \
+            ALBTargetGroupArn=${{ steps.alb.outputs.web-target-group-arn }} \
+            SubnetIds="${{ steps.network.outputs.public-subnet-1 }},${{ steps.network.outputs.public-subnet-2 }}" \
+            KeyPairName=sshbastion \
+          --no-fail-on-empty-changeset
+        echo "Web Tier stack deployed successfully!"
+
+    - name: Get Application URLs
+      run: |
+        echo "Getting application URLs..."
+        WEB_ALB_DNS=$(aws elbv2 describe-load-balancers --names WebALB --query 'LoadBalancers[0].DNSName' --output text)
+        APP_ALB_DNS=$(aws elbv2 describe-load-balancers --names AppALB --query 'LoadBalancers[0].DNSName' --output text)
+        
+        echo "🌐 Web Application URL: http://$WEB_ALB_DNS"
+        echo "🔧 Internal ALB DNS: $APP_ALB_DNS"
+        echo ""
+        echo "✅ 3-Tier Infrastructure deployed successfully!"
+        echo ""
+        echo "📊 Deployment Summary:"
+        echo "- Network Stack: VPC, Subnets, NAT Gateway, Route Tables"
+        echo "- Database Stack: RDS MySQL"
+        echo "- ALB Stack: External and Internal Load Balancers"
+        echo "- App Tier Stack: Flask backend (2 instances)"
+        echo "- Web Tier Stack: Apache frontend with proxy (2 instances)"
+
+  cleanup:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.cleanup == 'true'
+    
+    steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Cleanup Infrastructure
+      run: |
+        echo "🧹 Starting infrastructure cleanup..."
+        
+        # Delete stacks in reverse order
+        echo "Deleting Web Tier Stack..."
+        aws cloudformation delete-stack --stack-name web-tier-stack || true
+        aws cloudformation wait stack-delete-complete --stack-name web-tier-stack || true
+        
+        echo "Deleting App Tier Stack..."
+        aws cloudformation delete-stack --stack-name app-tier-stack || true
+        aws cloudformation wait stack-delete-complete --stack-name app-tier-stack || true
+        
+        echo "Deleting ALB Stack..."
+        aws cloudformation delete-stack --stack-name alb-stack || true
+        aws cloudformation wait stack-delete-complete --stack-name alb-stack || true
+        
+        echo "Deleting Database Stack..."
+        aws cloudformation delete-stack --stack-name db-stack || true
+        aws cloudformation wait stack-delete-complete --stack-name db-stack || true
+        
+        echo "Deleting Network Stack..."
+        aws cloudformation delete-stack --stack-name network-stack || true
+        aws cloudformation wait stack-delete-complete --stack-name network-stack || true
+        
+        echo "✅ Infrastructure cleanup completed!"
