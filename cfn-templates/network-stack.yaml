@@ -1,17 +1,38 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Network stack with VPC, subnets, IGW, NAT
+Description: |
+  Network Infrastructure Stack for 3-Tier Architecture
+  
+  This CloudFormation template creates the foundational network components:
+  - VPC with DNS resolution enabled
+  - Public and Private subnets across multiple AZs for high availability
+  - Internet Gateway for public internet access
+  - NAT Gateway for private subnet internet access
+  - Route tables with appropriate routing configurations
+  - Security foundation for multi-tier application deployment
+  
+  Network Architecture:
+  - VPC CIDR: 10.0.0.0/16 (65,536 IP addresses)
+  - Public Subnets: 10.0.1.0/24, 10.0.2.0/24
+  - Private Subnets: 10.0.3.0/24, 10.0.4.0/24
+  - Database Subnets: 10.0.5.0/24, 10.0.6.0/24
 
 Resources:
 
+  # Main VPC - Foundation for 3-tier architecture
+  # Provides isolated network environment with DNS support
   VPC:
     Type: AWS::EC2::VPC
     Properties:
-      CidrBlock: 10.0.0.0/16
-      EnableDnsHostnames: true
-      EnableDnsSupport: true
+      CidrBlock: 10.0.0.0/16  # Supports up to 65,536 IP addresses
+      EnableDnsHostnames: true  # Required for RDS and ALB
+      EnableDnsSupport: true    # Enable DNS resolution within VPC
       Tags:
         - Key: Name
           Value: 3TierVPC
+        - Key: Environment
+          Value: Production
+        - Key: Project
+          Value: ThreeTierApp
 
   InternetGateway:
     Type: AWS::EC2::InternetGateway
