@@ -1,9 +1,33 @@
 #!/bin/bash
 
+#==============================================================================
 # AWS 3-Tier Architecture Deployment Script
-# This script deploys the complete 3-tier architecture using CloudFormation stacks
+#==============================================================================
+# This script automates the deployment of the 3-tier CloudFormation stack
+# with proper error handling, validation, and rollback capabilities.
+#
+# Prerequisites:
+# - AWS CLI configured with appropriate permissions
+# - CloudFormation templates in cfn-templates/ directory
+# - Valid parameter values in configuration files
+#
+# Usage:
+#   ./deploy.sh [environment] [region]
+#   Example: ./deploy.sh prod us-east-1
+#
+# Features:
+# - Environment-specific parameter validation
+# - Stack drift detection
+# - Automatic rollback on failure
+# - Change set preview before deployment
+# - Progress monitoring and status updates
+#
+# Version: 2.0
+# Last Updated: $(date +'%Y-%m-%d')
+#==============================================================================
 
-set -e  # Exit on any error
+# Set strict error handling
+set -euo pipefail
 
 # Configuration
 AWS_REGION=${AWS_REGION:-"us-east-1"}

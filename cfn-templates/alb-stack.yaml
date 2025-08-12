@@ -1,5 +1,18 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: External and Internal ALBs with target groups and listeners
+Description: |
+  External and Internal ALBs with target groups and listeners
+  
+  This CloudFormation template creates:
+  - External Application Load Balancer for internet-facing traffic
+  - Internal Application Load Balancer for internal communication
+  - Target groups for load balancer routing
+  - Security groups with proper ingress/egress rules
+  - Health checks and monitoring configurations
+  
+  Best Practices:
+  - Uses least privilege security group rules
+  - Implements health checks for high availability
+  - Supports SSL/TLS termination at load balancer level
 
 Parameters:
   VpcId:
